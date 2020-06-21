@@ -1,25 +1,26 @@
 #!/bin/bash
 
-set -x
 set -euo pipefail
 
 cleanup() {
+  psql -c 'SELECT * from pg_replication_slots;'
+
   cleanup_log=$(
-    psql combined -c "ALTER SUBSCRIPTION content DISABLE;"
+    psql combined -c "ALTER SUBSCRIPTION posts DISABLE;"
     psql combined -c "ALTER SUBSCRIPTION users DISABLE;"
-    psql combined -c "ALTER SUBSCRIPTION content SET (slot_name = NONE);"
+    psql combined -c "ALTER SUBSCRIPTION posts SET (slot_name = NONE);"
     psql combined -c "ALTER SUBSCRIPTION users SET (slot_name = NONE);"
-    psql combined -c "DROP SUBSCRIPTION IF EXISTS content;"
+    psql combined -c "DROP SUBSCRIPTION IF EXISTS posts;"
     psql combined -c "DROP SUBSCRIPTION IF EXISTS users;"
 
-    psql content -c "SELECT pg_drop_replication_slot('content');"
+    psql posts -c "SELECT pg_drop_replication_slot('posts');"
     psql users   -c "SELECT pg_drop_replication_slot('users');"
 
-    psql content -c 'DROP PUBLICATION combined;'
+    psql posts -c 'DROP PUBLICATION combined;'
     psql users   -c 'DROP PUBLICATION combined;'
 
     dropdb combined
-    dropdb content
+    dropdb posts
     dropdb users
   )
   # echo $cleanup_log
@@ -27,14 +28,16 @@ cleanup() {
 
 trap cleanup EXIT
 
-# Enable uuids
+section() {
+  echo "## $@"
+}
 
-# Create two upstream databases
+section "Create two upstream databases"
 
-createdb content
-psql content -c "
+createdb posts
+psql posts -c "
 CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\";
-CREATE TABLE contents (
+CREATE TABLE posts (
     id UUID DEFAULT uuid_generate_v4() NOT NULL,
     content text NOT NULL,
     created_at timestamp without time zone NOT NULL,
@@ -51,10 +54,10 @@ CREATE TABLE users (
     updated_at timestamp without time zone NOT NULL);
 "
 
-# Create existing upstream data
+section "Create existing upstream data"
 
-psql content -c "
-INSERT INTO contents
+psql posts -c "
+INSERT INTO posts
   (content, created_at, updated_at)
   VALUES
     ('Blog Post', now(), now()),
@@ -69,13 +72,13 @@ INSERT INTO users
     ('Sarah', now(), now());
 "
 
-# Create single downstream database with superset schema
+section "Create single downstream database with superset schema"
 
 createdb combined
 
 psql combined -c "
 CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\";
-CREATE TABLE contents (
+CREATE TABLE posts (
     id uuid DEFAULT uuid_generate_v4() NOT NULL,
     content text NOT NULL,
     created_at timestamp without time zone NOT NULL,
@@ -87,42 +90,42 @@ CREATE TABLE users (
     updated_at timestamp without time zone NOT NULL);
 "
 
-# Define upstream replication publications
+section "Define upstream replication publications"
 
-psql content -c "SELECT pg_create_logical_replication_slot('content', 'pgoutput')";
+psql posts -c "SELECT pg_create_logical_replication_slot('posts', 'pgoutput')";
 psql users   -c "SELECT pg_create_logical_replication_slot('users', 'pgoutput')";
-psql content -c 'CREATE PUBLICATION combined FOR TABLE contents;'
+psql posts -c 'CREATE PUBLICATION combined FOR TABLE posts;'
 psql users   -c 'CREATE PUBLICATION combined FOR TABLE users;'
 
-# Define downstream replication subscription
+section "Define downstream replication subscription"
 
-psql combined -c "CREATE SUBSCRIPTION content CONNECTION 'host=localhost dbname=content' PUBLICATION combined WITH (create_slot=false);"
+psql combined -c "CREATE SUBSCRIPTION posts CONNECTION 'host=localhost dbname=posts' PUBLICATION combined WITH (create_slot=false);"
 psql combined -c "CREATE SUBSCRIPTION users CONNECTION 'host=localhost dbname=users' PUBLICATION combined WITH (create_slot=false);"
 
 sleep 1
 
-# Verify upstream data
+section "Verify upstream data"
 
-psql content -c "SELECT * FROM contents";
+psql posts -c "SELECT * FROM posts";
 psql users -c "SELECT * FROM users";
 
-# Check downstream for existing data
+section "Check downstream for existing data"
 
-psql combined -c "SELECT * FROM contents";
+psql combined -c "SELECT * FROM posts";
 psql combined -c "SELECT * FROM users";
 
-# Insert new data upstream
+section "Insert new data upstream"
 
-psql content -c "INSERT INTO contents (content, created_at, updated_at) VALUES ('New Post', now(), now());"
+psql posts -c "INSERT INTO posts (content, created_at, updated_at) VALUES ('New Post', now(), now());"
 psql users -c "INSERT INTO users (name, created_at, updated_at) VALUES ('Rebecca', now(), now());"
 
-# Check downstream for existing data
-psql combined -c "SELECT * FROM contents";
+section "Check downstream for existing data"
+psql combined -c "SELECT * FROM posts";
 psql combined -c "SELECT * FROM users";
 
 sleep 1
 
-# Check again
-psql combined -c "SELECT * FROM contents";
+section "Check again"
+psql combined -c "SELECT * FROM posts";
 psql combined -c "SELECT * FROM users";
 
