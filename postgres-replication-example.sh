@@ -14,10 +14,10 @@ cleanup() {
     psql combined -c "DROP SUBSCRIPTION IF EXISTS users;"
 
     psql posts -c "SELECT pg_drop_replication_slot('posts');"
-    psql users   -c "SELECT pg_drop_replication_slot('users');"
+    psql users -c "SELECT pg_drop_replication_slot('users');"
 
-    psql posts -c 'DROP PUBLICATION combined;'
-    psql users   -c 'DROP PUBLICATION combined;'
+    psql posts -c 'DROP PUBLICATION posts_to_combined;'
+    psql users -c 'DROP PUBLICATION users_to_combined;'
 
     dropdb combined
     dropdb posts
@@ -92,27 +92,38 @@ CREATE TABLE users (
 
 section "Define upstream replication publications"
 
-psql posts -c "SELECT pg_create_logical_replication_slot('posts', 'pgoutput')";
-psql users   -c "SELECT pg_create_logical_replication_slot('users', 'pgoutput')";
-psql posts -c 'CREATE PUBLICATION combined FOR TABLE posts;'
-psql users   -c 'CREATE PUBLICATION combined FOR TABLE users;'
+psql posts -t -c "SELECT pg_create_logical_replication_slot('posts', 'pgoutput')";
+psql users -t -c "SELECT pg_create_logical_replication_slot('users', 'pgoutput')";
+psql posts -c 'CREATE PUBLICATION posts_to_combined FOR TABLE posts;'
+psql users -c 'CREATE PUBLICATION users_to_combined FOR TABLE users;'
 
 section "Define downstream replication subscription"
 
-psql combined -c "CREATE SUBSCRIPTION posts CONNECTION 'host=localhost dbname=posts' PUBLICATION combined WITH (create_slot=false);"
-psql combined -c "CREATE SUBSCRIPTION users CONNECTION 'host=localhost dbname=users' PUBLICATION combined WITH (create_slot=false);"
+psql combined -c "CREATE SUBSCRIPTION posts CONNECTION 'host=localhost dbname=posts' PUBLICATION posts_to_combined WITH (slot_name=posts, create_slot=false);"
+psql combined -c "CREATE SUBSCRIPTION users CONNECTION 'host=localhost dbname=users' PUBLICATION users_to_combined WITH (slot_name=users, create_slot=false);"
 
-sleep 1
+section "Wait until both subscriptions are active"
+while true; do
+  psql -t -c "SELECT COUNT(*) FROM pg_replication_slots WHERE active = 't' AND slot_name IN ('posts', 'users');" | grep -q 2 && break
+  sleep 0.25;
+  echo -n .
+done
+echo ''
+
 
 section "Verify upstream data"
 
-psql posts -c "SELECT * FROM posts";
-psql users -c "SELECT * FROM users";
+psql posts -t -c "SELECT COUNT(*) FROM posts" | grep -q '2' \
+  && echo "Post upstream ✅" || echo "Post upstream ❌"
+psql users -t -c "SELECT COUNT(*) FROM users" | grep -q '2' \
+  && echo "User upstream ✅"|| echo "User upstream ❌"
 
 section "Check downstream for existing data"
 
-psql combined -c "SELECT * FROM posts";
-psql combined -c "SELECT * FROM users";
+psql combined -t -c "SELECT COUNT(*) FROM posts" | grep -q '2' \
+  && echo "Post replication ✅" || echo "Post replication ❌"
+psql combined -t -c "SELECT COUNT(*) FROM users" | grep -q '2' \
+  && echo "User replication ✅"|| echo "User replication ❌"
 
 section "Insert new data upstream"
 
@@ -120,12 +131,7 @@ psql posts -c "INSERT INTO posts (content, created_at, updated_at) VALUES ('New 
 psql users -c "INSERT INTO users (name, created_at, updated_at) VALUES ('Rebecca', now(), now());"
 
 section "Check downstream for existing data"
-psql combined -c "SELECT * FROM posts";
-psql combined -c "SELECT * FROM users";
-
-sleep 1
-
-section "Check again"
-psql combined -c "SELECT * FROM posts";
-psql combined -c "SELECT * FROM users";
-
+psql combined -t -c "SELECT COUNT(*) FROM posts" | grep -q '3' \
+  && echo "Post replication ✅" || echo "Post replication ❌"
+psql combined -t -c "SELECT COUNT(*) FROM users" | grep -q '3' \
+  && echo "User replication ✅"|| echo "User replication ❌"
