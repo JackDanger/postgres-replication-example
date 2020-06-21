@@ -28,8 +28,6 @@ cleanup() {
 trap cleanup EXIT
 
 # Enable uuids
-psql -c 'CREATE EXTENSION IF NOT EXISTS "uuid-ossp";'
-psql -c 'CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA public;'
 
 # Create two upstream databases
 
@@ -47,7 +45,7 @@ createdb users
 psql users -c "
 CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\";
 CREATE TABLE users (
-    id uuid DEFAULT uuid_generate_v1() NOT NULL,
+    id uuid DEFAULT uuid_generate_v4() NOT NULL,
     name text NOT NULL,
     created_at timestamp without time zone NOT NULL,
     updated_at timestamp without time zone NOT NULL);
@@ -78,12 +76,12 @@ createdb combined
 psql combined -c "
 CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\";
 CREATE TABLE contents (
-    id uuid DEFAULT uuid_generate_v1() NOT NULL,
+    id uuid DEFAULT uuid_generate_v4() NOT NULL,
     content text NOT NULL,
     created_at timestamp without time zone NOT NULL,
     updated_at timestamp without time zone NOT NULL);
 CREATE TABLE users (
-    id uuid DEFAULT uuid_generate_v1() NOT NULL,
+    id uuid DEFAULT uuid_generate_v4() NOT NULL,
     name text NOT NULL,
     created_at timestamp without time zone NOT NULL,
     updated_at timestamp without time zone NOT NULL);
@@ -101,16 +99,30 @@ psql users   -c 'CREATE PUBLICATION combined FOR TABLE users;'
 psql combined -c "CREATE SUBSCRIPTION content CONNECTION 'host=localhost dbname=content' PUBLICATION combined WITH (create_slot=false);"
 psql combined -c "CREATE SUBSCRIPTION users CONNECTION 'host=localhost dbname=users' PUBLICATION combined WITH (create_slot=false);"
 
+sleep 1
+
+# Verify upstream data
+
+psql content -c "SELECT * FROM contents";
+psql users -c "SELECT * FROM users";
+
 # Check downstream for existing data
 
-psql content -c "SELECT content FROM contents";
-psql users -c "SELECT name FROM users";
+psql combined -c "SELECT * FROM contents";
+psql combined -c "SELECT * FROM users";
 
 # Insert new data upstream
 
-psql content -c "INSERT INTO contents (content) VALUES ('New Post');"
-psql users -c "INSERT INTO users (name) VALUES ('Rebecca');"
+psql content -c "INSERT INTO contents (content, created_at, updated_at) VALUES ('New Post', now(), now());"
+psql users -c "INSERT INTO users (name, created_at, updated_at) VALUES ('Rebecca', now(), now());"
 
 # Check downstream for existing data
-psql content -c "SELECT content FROM contents";
-psql users -c "SELECT name FROM users";
+psql combined -c "SELECT * FROM contents";
+psql combined -c "SELECT * FROM users";
+
+sleep 1
+
+# Check again
+psql combined -c "SELECT * FROM contents";
+psql combined -c "SELECT * FROM users";
+
