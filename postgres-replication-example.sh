@@ -8,16 +8,26 @@ cleanup() {
   cleanup_log=$(
     psql combined -c "ALTER SUBSCRIPTION posts DISABLE;"
     psql combined -c "ALTER SUBSCRIPTION users DISABLE;"
+    psql posts -c "ALTER SUBSCRIPTION posts_backward DISABLE;"
+    psql users -c "ALTER SUBSCRIPTION users_backward DISABLE;"
     psql combined -c "ALTER SUBSCRIPTION posts SET (slot_name = NONE);"
     psql combined -c "ALTER SUBSCRIPTION users SET (slot_name = NONE);"
+    psql posts -c "ALTER SUBSCRIPTION posts_backward SET (slot_name = NONE);"
+    psql users -c "ALTER SUBSCRIPTION users_backward SET (slot_name = NONE);"
     psql combined -c "DROP SUBSCRIPTION IF EXISTS posts;"
+    psql posts -c "DROP SUBSCRIPTION IF EXISTS posts_backward;"
     psql combined -c "DROP SUBSCRIPTION IF EXISTS users;"
+    psql users -c "DROP SUBSCRIPTION IF EXISTS users_backward;"
 
-    psql posts -c "SELECT pg_drop_replication_slot('posts');"
-    psql users -c "SELECT pg_drop_replication_slot('users');"
+    psql -c "SELECT pg_drop_replication_slot('posts');"
+    psql -c "SELECT pg_drop_replication_slot('posts_backward');"
+    psql -c "SELECT pg_drop_replication_slot('users');"
+    psql -c "SELECT pg_drop_replication_slot('users_backward');"
 
-    psql posts -c 'DROP PUBLICATION posts_to_combined;'
-    psql users -c 'DROP PUBLICATION users_to_combined;'
+    psql posts    -c 'DROP PUBLICATION posts;'
+    psql combined -c 'DROP PUBLICATION posts_backward;'
+    psql users    -c 'DROP PUBLICATION users;'
+    psql combined -c 'DROP PUBLICATION users_backward;'
 
     dropdb combined
     dropdb posts
@@ -94,13 +104,13 @@ section "Define upstream replication publications"
 
 psql posts -t -c "SELECT pg_create_logical_replication_slot('posts', 'pgoutput')";
 psql users -t -c "SELECT pg_create_logical_replication_slot('users', 'pgoutput')";
-psql posts -c 'CREATE PUBLICATION posts_to_combined FOR TABLE posts;'
-psql users -c 'CREATE PUBLICATION users_to_combined FOR TABLE users;'
+psql posts -c 'CREATE PUBLICATION posts FOR TABLE posts;'
+psql users -c 'CREATE PUBLICATION users FOR TABLE users;'
 
 section "Define downstream replication subscription"
 
-psql combined -c "CREATE SUBSCRIPTION posts CONNECTION 'host=localhost dbname=posts' PUBLICATION posts_to_combined WITH (slot_name=posts, create_slot=false);"
-psql combined -c "CREATE SUBSCRIPTION users CONNECTION 'host=localhost dbname=users' PUBLICATION users_to_combined WITH (slot_name=users, create_slot=false);"
+psql combined -c "CREATE SUBSCRIPTION posts CONNECTION 'host=localhost dbname=posts' PUBLICATION posts WITH (slot_name=posts, create_slot=false);"
+psql combined -c "CREATE SUBSCRIPTION users CONNECTION 'host=localhost dbname=users' PUBLICATION users WITH (slot_name=users, create_slot=false);"
 
 section "Wait until both subscriptions are active"
 while true; do
@@ -135,3 +145,17 @@ psql combined -t -c "SELECT COUNT(*) FROM posts" | grep -q '3' \
   && echo "Post replication ✅" || echo "Post replication ❌"
 psql combined -t -c "SELECT COUNT(*) FROM users" | grep -q '3' \
   && echo "User replication ✅"|| echo "User replication ❌"
+
+
+section "Define subscriptions for the same tables *from* the replica"
+
+psql combined -t -c "SELECT pg_create_logical_replication_slot('posts_backward', 'pgoutput')";
+psql combined -t -c "SELECT pg_create_logical_replication_slot('users_backward', 'pgoutput')";
+psql combined -c 'CREATE PUBLICATION posts_backward FOR TABLE posts;'
+psql combined -c 'CREATE PUBLICATION users_backward FOR TABLE users;'
+
+section "Define subscriptions upstream"
+
+psql posts -c "CREATE SUBSCRIPTION posts_backward CONNECTION 'host=localhost dbname=combined' PUBLICATION posts_backward WITH (slot_name=posts_backward, create_slot=false);"
+psql users -c "CREATE SUBSCRIPTION users_backward CONNECTION 'host=localhost dbname=combined' PUBLICATION users_backward WITH (slot_name=users_backward, create_slot=false);"
+
