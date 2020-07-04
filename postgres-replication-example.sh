@@ -140,12 +140,16 @@ section "Insert new data upstream"
 psql posts -c "INSERT INTO posts (content, created_at, updated_at) VALUES ('New Post', now(), now());"
 psql users -c "INSERT INTO users (name, created_at, updated_at) VALUES ('Rebecca', now(), now());"
 
+sleep 1
 section "Check downstream for existing data"
 psql combined -t -c "SELECT COUNT(*) FROM posts" | grep -q '3' \
   && echo "Post replication ✅" || echo "Post replication ❌"
 psql combined -t -c "SELECT COUNT(*) FROM users" | grep -q '3' \
   && echo "User replication ✅"|| echo "User replication ❌"
 
+section "Drop the original subscriptions"
+psql combined -c "DROP SUBSCRIPTION posts;"
+psql combined -c "DROP SUBSCRIPTION users;"
 
 section "Define subscriptions for the same tables *from* the replica"
 
@@ -159,3 +163,23 @@ section "Define subscriptions upstream"
 psql posts -c "CREATE SUBSCRIPTION posts_backward CONNECTION 'host=localhost dbname=combined' PUBLICATION posts_backward WITH (slot_name=posts_backward, create_slot=false);"
 psql users -c "CREATE SUBSCRIPTION users_backward CONNECTION 'host=localhost dbname=combined' PUBLICATION users_backward WITH (slot_name=users_backward, create_slot=false);"
 
+section "Wait until both subscriptions are active"
+while true; do
+  psql -t -c "SELECT COUNT(*) FROM pg_replication_slots WHERE active = 't' AND slot_name IN ('posts_backward', 'users_backward');" | grep -q 2 && break
+  sleep 0.25;
+  echo -n .
+done
+echo ''
+
+section "Insert new data downstream"
+
+psql combined -c "INSERT INTO posts (content, created_at, updated_at) VALUES ('On combined', now(), now());"
+psql combined -c "INSERT INTO users (name, created_at, updated_at) VALUES ('Combined', now(), now());"
+
+sleep 1
+
+section "Check upstream for new data replicated backwards"
+psql posts -t -c "SELECT COUNT(*) FROM posts" | grep -q '4' \
+  && echo "Post replication ✅" || echo "Post replication ❌"
+psql users -t -c "SELECT COUNT(*) FROM users" | grep -q '4' \
+  && echo "User replication ✅"|| echo "User replication ❌"
